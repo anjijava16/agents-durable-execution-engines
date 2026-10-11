@@ -1,0 +1,2 @@
+temporalio[deepagents]>=1.32.0
+temporalio

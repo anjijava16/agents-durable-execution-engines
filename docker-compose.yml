@@ -1,0 +1,85 @@
+# Full local stack: Temporal dev server + UI, both worker pools and the API.
+#
+#   docker compose up --build
+#   open http://localhost:8233   (Temporal UI)
+#   open http://localhost:8000/docs   (ShopSphere API)
+#   python scripts/demo.py
+#
+# The dev server keeps state in a SQLite file inside the container volume.
+# For a production-like setup (Postgres/Cassandra + Elasticsearch) see
+# docs/12-production.md.
+
+services:
+  temporal:
+    image: temporalio/temporal:latest
+    command:
+      - server
+      - start-dev
+      - --ip=0.0.0.0
+      - --ui-ip=0.0.0.0
+      - --db-filename=/data/temporal.db
+      - --search-attribute=OrderStatus=Keyword
+      - --search-attribute=CustomerId=Keyword
+    ports:
+      - "7233:7233"   # gRPC frontend (SDKs and CLI talk to this)
+      - "8233:8233"   # Web UI
+    volumes:
+      - temporal-data:/data
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "localhost:7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker-orders:
+    build: .
+    command: python -m shopsphere.worker orders
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      RETAIL_DB_PATH: /app/data/shopsphere.db
+    volumes:
+      - retail-data:/app/data
+    depends_on:
+      temporal:
+        condition: service_healthy
+    deploy:
+      replicas: 2   # kill one with `docker compose kill worker-orders` and watch nothing break
+
+  worker-ai:
+    build: .
+    command: python -m shopsphere.worker ai
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      RETAIL_DB_PATH: /app/data/shopsphere.db
+    volumes:
+      - retail-data:/app/data
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+  api:
+    build: .
+    command: uvicorn shopsphere.api.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      RETAIL_DB_PATH: /app/data/shopsphere.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - retail-data:/app/data
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+volumes:
+  temporal-data:
+  retail-data:
